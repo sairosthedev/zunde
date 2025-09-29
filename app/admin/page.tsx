@@ -6,6 +6,7 @@ import { AttendanceStats } from "@/components/attendance-stats"
 import { Button } from "@/components/ui/button"
 import { Home, Users, ClipboardList, BarChart3, LogOut, ArrowRight } from "lucide-react"
 import Link from "next/link"
+import NextImage from "next/image"
 import { useState, useEffect } from "react"
 import type { Event, Participant } from "@/lib/types"
 
@@ -55,10 +56,10 @@ export default function AdminPage() {
         <div className="p-6 border-b border-green-700">
           <div className="flex items-center space-x-3">
             <div className="w-10 h-10 bg-white rounded-full flex items-center justify-center">
-              <span className="text-green-800 font-bold text-xl">Z</span>
+            <span className="text-green-800 font-bold text-xl"><NextImage src="/images/uz-sda-logo.png" alt="Zunde Camp" width={40} height={40} /></span>
             </div>
             <div>
-              <h1 className="text-white font-bold text-lg">Zunde Camp</h1>
+              <h1 className="text-white font-bold text-lg">Event Management</h1>
               <p className="text-green-200 text-xs">Admin Portal</p>
             </div>
           </div>

@@ -31,35 +31,11 @@ export function CheckInHistory() {
 
   const fetchCheckInHistory = async () => {
     try {
-      // This would be a real API call in production
-      // For demo purposes, we'll create mock data
-      const mockRecords: CheckInRecord[] = [
-        {
-          _id: "1",
-          participantName: "John Doe",
-          ticketId: "ZUN-ABC123-DEF456",
-          eventName: "Sunday Outreach - Downtown",
-          checkInTime: new Date(Date.now() - 3600000).toISOString(),
-          busNumber: "Bus 1",
-          staffMember: "Mary Johnson",
-          location: "Church Main",
-          status: "checked-in",
-        },
-        {
-          _id: "2",
-          participantName: "Jane Smith",
-          ticketId: "ZUN-GHI789-JKL012",
-          eventName: "Sunday Outreach - Downtown",
-          checkInTime: new Date(Date.now() - 7200000).toISOString(),
-          checkOutTime: new Date(Date.now() - 1800000).toISOString(),
-          busNumber: "Bus 2",
-          staffMember: "David Wilson",
-          location: "Assembly Hall",
-          status: "checked-out",
-        },
-      ]
-
-      setRecords(mockRecords)
+      const response = await fetch("/api/checkin")
+      const data = await response.json()
+      if (data.success) {
+        setRecords(data.records)
+      }
     } catch (error) {
       console.error("Failed to fetch check-in history:", error)
     } finally {

@@ -55,7 +55,8 @@ export async function POST(request: NextRequest) {
         },
       )
 
-      const event = await db.collection("events").findOne({ _id: participant.eventId })
+      // participant.eventId is saved as string; events _id is ObjectId
+      const event = await db.collection("events").findOne({ _id: new ObjectId(participant.eventId) })
 
       if (event) {
         const notificationResult = await sendCheckInConfirmation(participant, event, busNumber, {
@@ -105,5 +106,75 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error("Check-in/out error:", error)
     return NextResponse.json({ success: false, error: "Check-in/out failed" }, { status: 500 })
+  }
+}
+
+export async function GET(request: NextRequest) {
+  try {
+    if (!process.env.MONGODB_URI) {
+      return NextResponse.json({ success: true, records: [] })
+    }
+
+    const { searchParams } = new URL(request.url)
+    const eventId = searchParams.get("eventId")
+
+    const db = await getDatabase()
+
+    const match: any = {}
+    if (eventId) {
+      match.eventId = eventId
+    }
+
+    // Join checkins with participants and events for richer data
+    const pipeline = [
+      { $match: match },
+      {
+        $lookup: {
+          from: "participants",
+          localField: "participantId",
+          foreignField: "_id",
+          as: "participant",
+        },
+      },
+      { $unwind: "$participant" },
+      {
+        $lookup: {
+          from: "events",
+          let: { evId: "$eventId" },
+          pipeline: [
+            {
+              $match: {
+                $expr: { $eq: ["$_id", { $toObjectId: "$$evId" }] },
+              },
+            },
+          ],
+          as: "event",
+        },
+      },
+      { $unwind: "$event" },
+      { $sort: { checkInTime: -1 } },
+      {
+        $project: {
+          _id: 1,
+          participantName: "$participant.fullName",
+          ticketId: "$participant.ticketId",
+          eventName: "$event.name",
+          location: 1,
+          busNumber: 1,
+          staffMember: 1,
+          checkInTime: 1,
+          checkOutTime: 1,
+          status: {
+            $cond: [{ $ifNull: ["$checkOutTime", false] }, "checked-out", "checked-in"],
+          },
+        },
+      },
+    ]
+
+    const records = await db.collection("checkins").aggregate(pipeline).toArray()
+    return NextResponse.json({ success: true, records })
+  } catch (error) {
+    console.error("Fetch check-in history error:", error)
+    return NextResponse.json({ success: false, error: "Failed to fetch check-in history" }, { status: 500 })
   }
 }

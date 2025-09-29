@@ -4,7 +4,8 @@ import { useEffect, useRef, useState } from "react"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { Camera, CameraOff, AlertCircle } from "lucide-react"
+import { Camera, CameraOff, AlertCircle, CheckCircle } from "lucide-react"
+import jsQR from "jsqr"
 
 interface QRScannerProps {
   onScan: (data: string) => void
@@ -16,29 +17,88 @@ export function QRScanner({ onScan }: QRScannerProps) {
   const [isScanning, setIsScanning] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [stream, setStream] = useState<MediaStream | null>(null)
+  const [lastScannedCode, setLastScannedCode] = useState<string | null>(null)
+  const [scanSuccess, setScanSuccess] = useState(false)
+  const [cameras, setCameras] = useState<MediaDeviceInfo[]>([])
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string>("")
+
+  // Load available cameras (after user grants permission)
+  useEffect(() => {
+    async function loadDevices() {
+      try {
+        if (!navigator.mediaDevices?.enumerateDevices) return
+        const devices = await navigator.mediaDevices.enumerateDevices()
+        const videoInputs = devices.filter((d) => d.kind === "videoinput")
+        setCameras(videoInputs)
+        // Prefer the last camera (often the back camera on phones)
+        if (videoInputs.length > 0 && !selectedDeviceId) {
+          setSelectedDeviceId(videoInputs[videoInputs.length - 1].deviceId)
+        }
+      } catch (e) {
+        console.warn("Unable to enumerate devices", e)
+      }
+    }
+    loadDevices()
+  }, [selectedDeviceId])
 
   const startScanning = async () => {
     try {
       setError(null)
-      const mediaStream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: "environment", // Use back camera on mobile
-          width: { ideal: 640 },
-          height: { ideal: 480 },
-        },
-      })
+
+      // Primary constraints (prefer back camera on mobile)
+      const videoConstraint: MediaTrackConstraints = selectedDeviceId
+        ? { deviceId: { exact: selectedDeviceId }, width: { ideal: 640 }, height: { ideal: 480 } }
+        : { facingMode: { ideal: "environment" }, width: { ideal: 640 }, height: { ideal: 480 } }
+
+      const constraintsPrimary: MediaStreamConstraints = { video: videoConstraint, audio: false }
+
+      // Fallback constraints (any available camera)
+      const constraintsFallback: MediaStreamConstraints = { video: true, audio: false }
+
+      let mediaStream: MediaStream
+      try {
+        mediaStream = await navigator.mediaDevices.getUserMedia(constraintsPrimary)
+      } catch (primaryError) {
+        console.warn("Primary camera constraints failed, trying fallback...", primaryError)
+        mediaStream = await navigator.mediaDevices.getUserMedia(constraintsFallback)
+      }
 
       if (videoRef.current) {
-        videoRef.current.srcObject = mediaStream
+        const video = videoRef.current
+        // iOS/Safari compatibility
+        video.setAttribute("playsinline", "true")
+        video.setAttribute("muted", "true")
+        video.muted = true
+        video.autoplay = true
+        video.srcObject = mediaStream
         setStream(mediaStream)
         setIsScanning(true)
+
+        // Ensure video starts
+        const playPromise = video.play?.()
+        if (playPromise && typeof playPromise.then === "function") {
+          playPromise.catch((e: unknown) => {
+            console.warn("Video play() was interrupted:", e)
+          })
+        }
+
+        // Also start after metadata if needed
+        video.onloadedmetadata = () => {
+          video.play?.()
+        }
 
         // Start scanning for QR codes
         scanForQRCode()
       }
     } catch (err) {
       console.error("Error accessing camera:", err)
-      setError("Unable to access camera. Please ensure camera permissions are granted.")
+      const message =
+        (err as any)?.name === "NotAllowedError"
+          ? "Camera permission denied. Please allow camera access in your browser settings and reload."
+          : (err as any)?.name === "NotFoundError"
+          ? "No camera device found. Please connect a camera and try again."
+          : "Unable to access camera. Please ensure camera permissions are granted."
+      setError(message)
     }
   }
 
@@ -68,10 +128,28 @@ export function QRScanner({ onScan }: QRScannerProps) {
 
     try {
       const imageData = context.getImageData(0, 0, canvas.width, canvas.height)
+      
+      // Use jsQR to detect QR codes
+      const code = jsQR(imageData.data, imageData.width, imageData.height, {
+        inversionAttempts: "dontInvert",
+      })
 
-      // Simple QR code detection simulation
-      // In a real implementation, you would use a QR code library like jsQR
-      // For demo purposes, we'll simulate scanning by checking for manual input
+      if (code) {
+        // Prevent scanning the same code multiple times
+        if (code.data !== lastScannedCode) {
+          setLastScannedCode(code.data)
+          setScanSuccess(true)
+          
+          // Show success for 2 seconds, then call onScan
+          setTimeout(() => {
+            onScan(code.data)
+            setScanSuccess(false)
+            setLastScannedCode(null)
+          }, 2000)
+          
+          return
+        }
+      }
 
       setTimeout(scanForQRCode, 100)
     } catch (err) {
@@ -88,11 +166,11 @@ export function QRScanner({ onScan }: QRScannerProps) {
     }
   }, [stream])
 
-  // Simulate QR code scanning for demo
-  const simulateQRScan = () => {
-    const mockTicketId = `ZUN-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`
-    onScan(mockTicketId)
+  // Reset scan state when stopping
+  const handleStopScanning = () => {
     stopScanning()
+    setScanSuccess(false)
+    setLastScannedCode(null)
   }
 
   return (
@@ -104,21 +182,50 @@ export function QRScanner({ onScan }: QRScannerProps) {
         </Alert>
       )}
 
+      {/* Camera selector (if multiple cameras available) */}
+      {cameras.length > 1 && (
+        <div className="flex items-center gap-2">
+          <label className="text-sm text-muted-foreground">Camera:</label>
+          <select
+            className="flex-1 bg-background border rounded px-2 py-1 text-sm"
+            value={selectedDeviceId}
+            onChange={(e) => setSelectedDeviceId(e.target.value)}
+          >
+            {cameras.map((cam, idx) => (
+              <option value={cam.deviceId} key={cam.deviceId}>
+                {cam.label || `Camera ${idx + 1}`}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
       <Card className="overflow-hidden">
         <CardContent className="p-0">
-          <div className="relative aspect-video bg-muted flex items-center justify-center">
+          <div className="relative bg-muted flex items-center justify-center h-[60vh] rounded-md overflow-hidden">
             {isScanning ? (
               <>
                 <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
                 <canvas ref={canvasRef} className="hidden" />
                 <div className="absolute inset-0 flex items-center justify-center">
-                  <div className="w-48 h-48 border-2 border-accent rounded-lg border-dashed animate-pulse">
-                    <div className="w-full h-full flex items-center justify-center">
-                      <span className="text-accent text-sm font-medium bg-background/80 px-2 py-1 rounded">
-                        Position QR code here
-                      </span>
+                  {scanSuccess ? (
+                    <div className="w-48 h-48 border-2 border-green-500 rounded-lg bg-green-500/20 flex items-center justify-center">
+                      <div className="text-center">
+                        <CheckCircle className="w-12 h-12 text-green-500 mx-auto mb-2" />
+                        <span className="text-green-500 text-sm font-medium bg-background/80 px-2 py-1 rounded">
+                          QR Code Detected!
+                        </span>
+                      </div>
                     </div>
-                  </div>
+                  ) : (
+                    <div className="w-48 h-48 border-2 border-accent rounded-lg border-dashed animate-pulse">
+                      <div className="w-full h-full flex items-center justify-center">
+                        <span className="text-accent text-sm font-medium bg-background/80 px-2 py-1 rounded">
+                          Position QR code here
+                        </span>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </>
             ) : (
@@ -139,15 +246,10 @@ export function QRScanner({ onScan }: QRScannerProps) {
             Start Scanner
           </Button>
         ) : (
-          <>
-            <Button onClick={stopScanning} variant="outline" className="flex-1 bg-transparent">
-              <CameraOff className="w-4 h-4 mr-2" />
-              Stop Scanner
-            </Button>
-            <Button onClick={simulateQRScan} variant="secondary" className="flex-1">
-              Simulate Scan (Demo)
-            </Button>
-          </>
+          <Button onClick={handleStopScanning} variant="outline" className="flex-1 bg-transparent">
+            <CameraOff className="w-4 h-4 mr-2" />
+            Stop Scanner
+          </Button>
         )}
       </div>
 
